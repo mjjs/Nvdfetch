@@ -8,6 +8,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -108,6 +109,11 @@ func createConfig() {
 }
 
 func main() {
+	firstRun := flag.Bool("n", false, "Run the first time setup again")
+	flag.Parse()
+	if *firstRun {
+		createConfig()
+	}
 	configFile := loadConfig()
 
 	// Map config JSON to cfg struct
