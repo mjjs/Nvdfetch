@@ -1,9 +1,3 @@
-// TODO:
-// * Find out users OS, Arch, GPU series and GPU model [✓]
-// * Save info to config file [✓]
-// * Map values to nvidia.com id values [✓]
-// * Make a request to nvidia server to find newest driver for given parameters [✓]
-
 package main
 
 import (
@@ -19,6 +13,7 @@ import (
 	"github.com/mxpv/nvml-go"
 )
 
+// Struct to hold the required information to determine which driver to download
 type cfg struct {
 	Winver    int  `json:"Winver,string"`
 	Fermi     bool `json:"Fermi,string"`
@@ -33,16 +28,14 @@ func checkError(err error) {
 	}
 }
 
-// Check whether the system is 64bit or 32bit
+// Check whether Windows is 64bit or 32bit
 func is64() bool {
 	// Works only with Windows
-	if _, y := os.LookupEnv("ProgramFiles(x86)"); y == true {
-		return true
-	} else {
-		return false
-	}
+	_, y := os.LookupEnv("ProgramFiles(x86)")
+	return y
 }
 
+// loadConfig reads the config file and returns its contents. If the file does not exist, createConfig will be called to create the file.
 func loadConfig() []byte {
 	config, err := ioutil.ReadFile("config.json")
 	if os.IsNotExist(err) {
@@ -55,6 +48,7 @@ func loadConfig() []byte {
 	}
 }
 
+// createConfig asks the user for a series of questions and saves the answers into the config file.
 func createConfig() {
 	config, err := os.Create("config.json")
 	checkError(err)
@@ -108,33 +102,12 @@ func createConfig() {
 	config.Close()
 }
 
-func main() {
-	firstRun := flag.Bool("n", false, "Run the first time setup again")
-	flag.Parse()
-	if *firstRun {
-		createConfig()
-	}
-	configFile := loadConfig()
-
-	// Map config JSON to cfg struct
-	var cfg cfg
-	err := json.Unmarshal(configFile, &cfg)
-	checkError(err)
-
-	nvml, err := nvml.New("")
-	checkError(err)
-	nvml.Init()
-	defer nvml.Shutdown()
-
-	// psid = gpu series
-	// pfid = gpu model
-	// osid = os version
-	osId := getOsId(cfg.Winver, cfg.Sixtyfour)
-	psId, pfId := getGpuIds(cfg.Fermi, cfg.Notebook)
-	var downloadUrl string = "http://www.nvidia.co.uk/Download/processDriver.aspx?psid=" + strconv.Itoa(psId) + "&pfid=" + strconv.Itoa(pfId) + "&rpf=1&osid=" + strconv.Itoa(osId) + "&lid=2&lang=en-uk&ctk=0"
+// getDownloadUrl crawls the Nvidia's webpage and parses the required webpages to find the download link for the driver
+func getDownloadUrl(url string) string {
+	const nvidiaDownloadPage string = "http://uk.download.nvidia.com"
 
 	// Get the driver page behind the generated driver url
-	resp, err := http.Get(downloadUrl)
+	resp, err := http.Get(url)
 	checkError(err)
 	defer resp.Body.Close()
 	driverPage, err := ioutil.ReadAll(resp.Body)
@@ -147,7 +120,62 @@ func main() {
 	checkError(err)
 
 	// Parse the driver executable link from the driver page
-	var driverLink = regexp.MustCompile(`\/Windows.*exe&lang=\w+`)
-	exeLink := "http://www.nvidia.co.uk" + driverLink.FindString(string(dlPage))
-	fmt.Println(exeLink)
+	var driverLinkRegexp = regexp.MustCompile(`\/Windows.*exe&lang=\w+`)
+	downloadUrl := nvidiaDownloadPage + driverLinkRegexp.FindString(string(dlPage))
+
+	return downloadUrl
+}
+
+func main() {
+	firstRun := flag.Bool("f", false, "Run the first time setup and exit")
+	getCurrentDriverVersion := flag.Bool("v", false, "Print the current version of the GPU driver and exit")
+	flag.Parse()
+
+	if *firstRun {
+		createConfig()
+		os.Exit(0)
+	}
+	config := loadConfig()
+
+	// Map config JSON to cfg struct
+	var cfg cfg
+	err := json.Unmarshal(config, &cfg)
+	checkError(err)
+
+	// Initialize the nvml library so we can query the GPU for information
+	nvml, err := nvml.New("")
+	checkError(err)
+	nvml.Init()
+	defer nvml.Shutdown()
+
+	if *getCurrentDriverVersion {
+		currentVersion, err := nvml.SystemGetDriverVersion()
+		nvml.Shutdown()
+		checkError(err)
+		fmt.Print(currentVersion)
+		os.Exit(0)
+	}
+
+	// osId = os version, psId = gpu series, pfId = gpu model
+	osId := getOsId(cfg.Winver, cfg.Sixtyfour)
+	psId, pfId := getGpuIds(cfg.Fermi, cfg.Notebook)
+
+	// Generate the initial URL which redirects to the driver's download page
+	downloadUrl := "http://www.nvidia.co.uk/Download/processDriver.aspx?psid=" + strconv.Itoa(psId) + "&pfid=" + strconv.Itoa(pfId) + "&rpf=1&osid=" + strconv.Itoa(osId) + "&lid=2&lang=en-uk&ctk=0"
+	downloadUrl = getDownloadUrl(downloadUrl)
+
+	// Get current driver version and compare it to the newest
+	currentVersion, err := nvml.SystemGetDriverVersion()
+	checkError(err)
+
+	currentVersionFloat, err := strconv.ParseFloat(currentVersion, 64)
+	checkError(err)
+
+	versionRegexp := regexp.MustCompile(`\d+\.\d+`)
+	newestVersion, err := strconv.ParseFloat(versionRegexp.FindString(downloadUrl), 64)
+
+	if currentVersionFloat < newestVersion {
+		fmt.Println("Current version", currentVersionFloat, "---", newestVersion, "Newest version")
+		fmt.Println(downloadUrl)
+	}
 }
