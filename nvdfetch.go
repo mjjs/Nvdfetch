@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 
 	"github.com/mxpv/nvml-go"
+	"golang.org/x/sys/windows"
 )
 
 // Struct to hold the required information to determine which driver to download
@@ -103,11 +105,15 @@ func createConfig() {
 }
 
 // getDownloadUrl crawls the Nvidia's webpage and parses the required webpages to find the download link for the driver
-func getDownloadUrl(url string) string {
+func getDownloadUrl(psId, pfId, osId int) string {
 	const nvidiaDownloadPage string = "http://uk.download.nvidia.com"
+	const nvidiaSearchPage string = "http://www.nvidia.co.uk/Download/processDriver.aspx"
+
+	// Generate the initial URL which redirects to the driver's download page
+	driverSearchUrl := nvidiaSearchPage + "&?psid=" + strconv.Itoa(psId) + "&pfid=" + strconv.Itoa(pfId) + "&rpf=1&osid=" + strconv.Itoa(osId) + "&lid=2&lang=en-uk&ctk=0"
 
 	// Get the driver page behind the generated driver url
-	resp, err := http.Get(url)
+	resp, err := http.Get(driverSearchUrl)
 	checkError(err)
 	defer resp.Body.Close()
 	driverPage, err := ioutil.ReadAll(resp.Body)
@@ -126,21 +132,56 @@ func getDownloadUrl(url string) string {
 	return downloadUrl
 }
 
+func parseWindowsVersion() int {
+	v, err := windows.GetVersion()
+	checkError(err)
+	version := strconv.Itoa(int(byte(v))) + "." + strconv.Itoa(int(uint8(v>>8)))
+
+	switch version {
+	case "6.1":
+		return 7
+	case "6.2":
+		return 8
+	case "10.0":
+		return 10
+	default:
+		// Default to Windows 10 because it's the newest
+		return 10
+	}
+}
+
 func main() {
+	var osId, psId, pfId int
+
 	firstRun := flag.Bool("f", false, "Run the first time setup and exit")
 	getCurrentDriverVersion := flag.Bool("dv", false, "Print the current version of the GPU driver and exit")
+	automaticMode := flag.Bool("a", false, "Automatically query the host system for required information to get the latest driver")
 	flag.Parse()
 
 	if *firstRun {
 		createConfig()
 		os.Exit(0)
 	}
-	config := loadConfig()
 
-	// Map config JSON to cfg struct
-	var cfg cfg
-	err := json.Unmarshal(config, &cfg)
-	checkError(err)
+	if *automaticMode {
+		fmt.Println("Automatic mode activated")
+		if runtime.GOOS != "windows" {
+			fmt.Println("Unsupported operating system detected")
+			os.Exit(-1)
+		}
+		osId = parseWindowsVersion()
+		os.Exit(0)
+	} else {
+		config := loadConfig()
+		// Map config JSON to cfg struct
+		var cfg cfg
+		err := json.Unmarshal(config, &cfg)
+		checkError(err)
+
+		// osId = os version, psId = gpu series, pfId = gpu model
+		osId = getOsId(cfg.Winver, cfg.Sixtyfour)
+		psId, pfId = getGpuIds(cfg.Fermi, cfg.Notebook)
+	}
 
 	// Initialize the nvml library so we can query the GPU for information
 	nvml, err := nvml.New("")
@@ -150,19 +191,13 @@ func main() {
 
 	if *getCurrentDriverVersion {
 		currentVersion, err := nvml.SystemGetDriverVersion()
-		nvml.Shutdown()
 		checkError(err)
+		nvml.Shutdown()
 		fmt.Print(currentVersion)
 		os.Exit(0)
 	}
 
-	// osId = os version, psId = gpu series, pfId = gpu model
-	osId := getOsId(cfg.Winver, cfg.Sixtyfour)
-	psId, pfId := getGpuIds(cfg.Fermi, cfg.Notebook)
-
-	// Generate the initial URL which redirects to the driver's download page
-	downloadUrl := "http://www.nvidia.co.uk/Download/processDriver.aspx?psid=" + strconv.Itoa(psId) + "&pfid=" + strconv.Itoa(pfId) + "&rpf=1&osid=" + strconv.Itoa(osId) + "&lid=2&lang=en-uk&ctk=0"
-	downloadUrl = getDownloadUrl(downloadUrl)
+	downloadUrl := getDownloadUrl(psId, pfId, osId)
 
 	// Get current driver version and compare it to the newest
 	currentVersion, err := nvml.SystemGetDriverVersion()
