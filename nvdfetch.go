@@ -128,7 +128,7 @@ func getDownloadUrl(url string) string {
 
 func main() {
 	firstRun := flag.Bool("f", false, "Run the first time setup and exit")
-	getCurrentDriverVersion := flag.Bool("v", false, "Print the current version of the GPU driver and exit")
+	getCurrentDriverVersion := flag.Bool("dv", false, "Print the current version of the GPU driver and exit")
 	flag.Parse()
 
 	if *firstRun {
