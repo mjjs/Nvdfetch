@@ -54,7 +54,7 @@ func loadConfig() []byte {
 func createConfig() {
 	config, err := os.Create("config.json")
 	checkError(err)
-	fmt.Println("Running first time setup. Answer these questions to determine the right drivers for you:\n")
+	fmt.Print("Running first time setup. Answer these questions to determine the right drivers for you:\n\n")
 
 	var osVersion string
 	for osVersion != "1" && osVersion != "2" {
@@ -106,11 +106,12 @@ func createConfig() {
 
 // getDownloadUrl crawls the Nvidia's webpage and parses the required webpages to find the download link for the driver
 func getDownloadUrl(psId, pfId, osId int) string {
-	const nvidiaDownloadPage string = "http://uk.download.nvidia.com"
-	const nvidiaSearchPage string = "http://www.nvidia.co.uk/Download/processDriver.aspx"
+	fmt.Print("Fetching the driver download page\n\n")
+	const nvidiaDownloadPage string = "https://uk.download.nvidia.com"
+	const nvidiaSearchPage string = "https://www.nvidia.co.uk/Download/processDriver.aspx"
 
 	// Generate the initial URL which redirects to the driver's download page
-	driverSearchUrl := nvidiaSearchPage + "&?psid=" + strconv.Itoa(psId) + "&pfid=" + strconv.Itoa(pfId) + "&rpf=1&osid=" + strconv.Itoa(osId) + "&lid=2&lang=en-uk&ctk=0"
+	driverSearchUrl := nvidiaSearchPage + "?&psid=" + strconv.Itoa(psId) + "&pfid=" + strconv.Itoa(pfId) + "&rpf=1&osid=" + strconv.Itoa(osId) + "&lid=2&lang=en-uk&ctk=0"
 
 	// Get the driver page behind the generated driver url
 	resp, err := http.Get(driverSearchUrl)
@@ -126,7 +127,7 @@ func getDownloadUrl(psId, pfId, osId int) string {
 	checkError(err)
 
 	// Parse the driver executable link from the driver page
-	var driverLinkRegexp = regexp.MustCompile(`\/Windows.*exe&lang=\w+`)
+	driverLinkRegexp := regexp.MustCompile(`\/Windows.*exe&lang=\w+`)
 	downloadUrl := nvidiaDownloadPage + driverLinkRegexp.FindString(string(dlPage))
 
 	return downloadUrl
@@ -150,8 +151,36 @@ func parseWindowsVersion() int {
 	}
 }
 
+func parseGpuInfo(nvml nvml.API) (string, bool, bool) {
+	gpu, err := nvml.DeviceGetHandleByIndex(0)
+	checkError(err)
+	gpuName, err := nvml.DeviceGetName(gpu)
+	checkError(err)
+
+	// Check for M in the GPU name indicating a notebook model GPU
+	mobileGpuRegexp := regexp.MustCompile(`(GT|GTX)\s\d+M`)
+	isMobile := mobileGpuRegexp.MatchString(gpuName)
+
+	// Check if the gpu model is a Tesla (100) series GPU or newer
+	teslaRegexp := regexp.MustCompile(`(GTX|GT)\s\d+`)
+	isFermi := false
+
+	// Check if the gpu model is a Fermi (400) series GPU or newer
+	if teslaRegexp.MatchString(gpuName) {
+		fermiRegexp := regexp.MustCompile(`\s([456789]|1\d)\d+`)
+		isFermi = fermiRegexp.MatchString(gpuName)
+	}
+
+	return gpuName, isMobile, isFermi
+}
+
 func main() {
 	var osId, psId, pfId int
+	// Initialize the nvml library so we can query the GPU for information
+	nvml, err := nvml.New("")
+	checkError(err)
+	nvml.Init()
+	defer nvml.Shutdown()
 
 	firstRun := flag.Bool("f", false, "Run the first time setup and exit")
 	getCurrentDriverVersion := flag.Bool("dv", false, "Print the current version of the GPU driver and exit")
@@ -163,14 +192,27 @@ func main() {
 		os.Exit(0)
 	}
 
+	if *getCurrentDriverVersion {
+		currentVersion, err := nvml.SystemGetDriverVersion()
+		checkError(err)
+		nvml.Shutdown()
+		fmt.Print(currentVersion)
+		os.Exit(0)
+	}
+
 	if *automaticMode {
-		fmt.Println("Automatic mode activated")
+		fmt.Print("Querying system for required information\n\n")
 		if runtime.GOOS != "windows" {
 			fmt.Println("Unsupported operating system detected")
 			os.Exit(-1)
 		}
-		osId = parseWindowsVersion()
-		os.Exit(0)
+		gpuName, isNotebook, isFermi := parseGpuInfo(*nvml)
+		winVer := parseWindowsVersion()
+		osId = getOsId(winVer, is64())
+		psId, pfId = getGpuIds(isFermi, isNotebook)
+
+		fmt.Println("Windows version:", winVer)
+		fmt.Println("Gpu model:", gpuName)
 	} else {
 		config := loadConfig()
 		// Map config JSON to cfg struct
@@ -183,26 +225,11 @@ func main() {
 		psId, pfId = getGpuIds(cfg.Fermi, cfg.Notebook)
 	}
 
-	// Initialize the nvml library so we can query the GPU for information
-	nvml, err := nvml.New("")
-	checkError(err)
-	nvml.Init()
-	defer nvml.Shutdown()
-
-	if *getCurrentDriverVersion {
-		currentVersion, err := nvml.SystemGetDriverVersion()
-		checkError(err)
-		nvml.Shutdown()
-		fmt.Print(currentVersion)
-		os.Exit(0)
-	}
-
 	downloadUrl := getDownloadUrl(psId, pfId, osId)
 
 	// Get current driver version and compare it to the newest
 	currentVersion, err := nvml.SystemGetDriverVersion()
 	checkError(err)
-
 	currentVersionFloat, err := strconv.ParseFloat(currentVersion, 64)
 	checkError(err)
 
@@ -212,5 +239,7 @@ func main() {
 	if currentVersionFloat < newestVersion {
 		fmt.Println("Current version", currentVersionFloat, "---", newestVersion, "Newest version")
 		fmt.Println(downloadUrl)
+	} else {
+		fmt.Println("You already have the newest driver version installed:", currentVersion)
 	}
 }
