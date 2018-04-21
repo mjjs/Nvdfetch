@@ -6,6 +6,6 @@ On initial launch, the application asks the user a series of questions about the
 Currently Nvdfetch works only on Windows 7, 8.* and 10.
 
 ## Todo
-* Add automatic mode which determines the system's GPU and OS version without asking the user
+* Add automatic mode which determines the system's GPU and OS version without required input from the user
 * Add ability to download a newer driver (manually or automatically)
 * Support for other operating systems(?)
