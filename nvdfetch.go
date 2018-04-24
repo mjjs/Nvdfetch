@@ -10,9 +10,10 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"github.com/mxpv/nvml-go"
-	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 // Struct to hold the required information to determine which driver to download
@@ -130,24 +131,32 @@ func getDownloadUrl(psId, pfId, osId int) string {
 	driverLinkRegexp := regexp.MustCompile(`\/Windows.*exe&lang=\w+`)
 	downloadUrl := nvidiaDownloadPage + driverLinkRegexp.FindString(string(dlPage))
 
-	return downloadUrl
+	return strings.Split(downloadUrl, "&lang")[0]
 }
 
+// parseWindowsVersion queries the Windows registry for the version number of Windows
 func parseWindowsVersion() int {
-	v, err := windows.GetVersion()
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion`, registry.QUERY_VALUE)
 	checkError(err)
-	version := strconv.Itoa(int(byte(v))) + "." + strconv.Itoa(int(uint8(v>>8)))
+	defer k.Close()
 
-	switch version {
-	case "6.1":
-		return 7
-	case "6.2":
-		return 8
-	case "10.0":
+	_, _, err = k.GetStringValue("CurrentMajorVersionNumber")
+	if err == nil {
+		// Only Windows 10 has CurrentMajorVersionNumber
 		return 10
-	default:
-		// Default to Windows 10 because it's the newest
-		return 10
+	} else {
+		currentVersion, _, err := k.GetStringValue("CurrentVersion")
+		checkError(err)
+		switch currentVersion {
+		case "6.1":
+			return 7
+		case "6.2":
+			return 8
+		case "6.3":
+			return 8
+		default:
+			return 10
+		}
 	}
 }
 
@@ -237,7 +246,7 @@ func main() {
 	newestVersion, err := strconv.ParseFloat(versionRegexp.FindString(downloadUrl), 64)
 
 	if currentVersionFloat < newestVersion {
-		fmt.Println("Current version", currentVersionFloat, "---", newestVersion, "Newest version")
+		fmt.Println("Current version", currentVersionFloat, "<<<", newestVersion, "Newest version")
 		fmt.Println(downloadUrl)
 	} else {
 		fmt.Println("You already have the newest driver version installed:", currentVersion)
