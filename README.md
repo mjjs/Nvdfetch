@@ -2,8 +2,8 @@
 Nvdfetch is a CLI application written in Go for checking for new drivers for your Nvidia GPU.
 
 There are two ways of running Nvdfetch: 
-1. Run the application with no command line flags. On initial launch, the application asks the user a series of questions about their system, which help determine the correct driver to get. The answers are parsed and saved into a config file so they don't have to be entered every time.
-1. Use the ```-a``` flag. This runs the application in automatic mode, which queries the host system for the required information.
+1. Run the application with no command line arguments. This makes the application run in automatic mode, which queries the host system for the required information to find the correct drivers.
+1. Run the application with the ```-m``` argument. On initial launch, the application asks a series of questions about the host system. The answers are used to determine the correct driver to get. A config file ```config.json``` is created based on the answers and it will be used the next time the program is run.
 
 If you want to run the first time setup again, use the ```-f``` flag.
 
