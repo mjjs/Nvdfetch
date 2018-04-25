@@ -140,7 +140,7 @@ func parseWindowsVersion() int {
 	checkError(err)
 	defer k.Close()
 
-	_, _, err = k.GetStringValue("CurrentMajorVersionNumber")
+	_, _, err = k.GetIntegerValue("CurrentMajorVersionNumber")
 	if err == nil {
 		// Only Windows 10 has CurrentMajorVersionNumber
 		return 10
