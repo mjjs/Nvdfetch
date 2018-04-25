@@ -193,7 +193,8 @@ func main() {
 
 	firstRun := flag.Bool("f", false, "Run the first time setup and exit")
 	getCurrentDriverVersion := flag.Bool("dv", false, "Print the current version of the GPU driver and exit")
-	automaticMode := flag.Bool("a", false, "Automatically query the host system for required information to get the latest driver")
+	automaticMode := flag.Bool("a", true, "Automatically query the host system for required information to get the latest driver")
+	manualMode := flag.Bool("m", false, "Use the config file to determine the system information")
 	flag.Parse()
 
 	if *firstRun {
@@ -222,7 +223,9 @@ func main() {
 
 		fmt.Println("Windows version:", winVer)
 		fmt.Println("Gpu model:", gpuName)
-	} else {
+	}
+
+	if *manualMode {
 		config := loadConfig()
 		// Map config JSON to cfg struct
 		var cfg cfg
