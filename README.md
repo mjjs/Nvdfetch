@@ -10,6 +10,9 @@ If you want to run the first time setup again, use the ```-f``` flag.
 # Requirements
 Windows 7, 8.* or 10
 
+## Building
+Because the NVML library uses CGO, it needs to be compiled using GCC. The go tool should handle everything for you, but you need GCC to be installed and added to PATH before building Nvdfetch.
+
 # Todo
 * Add ability to download a newer driver (manually or automatically) instead of just printing the download URL
 * Support for other operating systems(?)
