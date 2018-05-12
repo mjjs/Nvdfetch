@@ -46,9 +46,8 @@ func loadConfig() []byte {
 		createConfig()
 		config, _ := ioutil.ReadFile("config.json")
 		return config
-	} else {
-		return config
 	}
+	return config
 }
 
 // createConfig asks the user for a series of questions and saves the answers into the config file.
@@ -105,17 +104,17 @@ func createConfig() {
 	config.Close()
 }
 
-// getDownloadUrl crawls the Nvidia's webpage and parses the required webpages to find the download link for the driver
-func getDownloadUrl(psId, pfId, osId int) string {
+// getDownloadURL crawls the Nvidia's webpage and parses the required webpages to find the download link for the driver
+func getDownloadURL(psID, pfID, osID int) string {
 	fmt.Print("Fetching the driver download page\n\n")
 	const nvidiaDownloadPage string = "https://uk.download.nvidia.com"
 	const nvidiaSearchPage string = "https://www.nvidia.co.uk/Download/processDriver.aspx"
 
 	// Generate the initial URL which redirects to the driver's download page
-	driverSearchUrl := nvidiaSearchPage + "?&psid=" + strconv.Itoa(psId) + "&pfid=" + strconv.Itoa(pfId) + "&rpf=1&osid=" + strconv.Itoa(osId) + "&lid=2&lang=en-uk&ctk=0"
+	driverSearchURL := nvidiaSearchPage + "?&psid=" + strconv.Itoa(psID) + "&pfid=" + strconv.Itoa(pfID) + "&rpf=1&osid=" + strconv.Itoa(osID) + "&lid=2&lang=en-uk&ctk=0"
 
 	// Get the driver page behind the generated driver url
-	resp, err := http.Get(driverSearchUrl)
+	resp, err := http.Get(driverSearchURL)
 	checkError(err)
 	defer resp.Body.Close()
 	driverPage, err := ioutil.ReadAll(resp.Body)
@@ -129,9 +128,9 @@ func getDownloadUrl(psId, pfId, osId int) string {
 
 	// Parse the driver executable link from the driver page
 	driverLinkRegexp := regexp.MustCompile(`\/Windows.*exe&lang=\w+`)
-	downloadUrl := nvidiaDownloadPage + driverLinkRegexp.FindString(string(dlPage))
+	downloadURL := nvidiaDownloadPage + driverLinkRegexp.FindString(string(dlPage))
 
-	return strings.Split(downloadUrl, "&lang")[0]
+	return strings.Split(downloadURL, "&lang")[0]
 }
 
 // parseWindowsVersion queries the Windows registry for the version number of Windows
@@ -144,20 +143,21 @@ func parseWindowsVersion() int {
 	if err == nil {
 		// Only Windows 10 has CurrentMajorVersionNumber
 		return 10
-	} else {
-		currentVersion, _, err := k.GetStringValue("CurrentVersion")
-		checkError(err)
-		switch currentVersion {
-		case "6.1":
-			return 7
-		case "6.2":
-			return 8
-		case "6.3":
-			return 8
-		default:
-			return 10
-		}
 	}
+	currentVersion, _, err := k.GetStringValue("CurrentVersion")
+	checkError(err)
+
+	switch currentVersion {
+	case "6.1":
+		return 7
+	case "6.2":
+		return 8
+	case "6.3":
+		return 8
+	default:
+		return 10
+	}
+
 }
 
 func parseGpuInfo(nvml nvml.API) (string, bool, bool) {
@@ -184,7 +184,7 @@ func parseGpuInfo(nvml nvml.API) (string, bool, bool) {
 }
 
 func main() {
-	var osId, psId, pfId int
+	var osID, psID, pfID int
 	// Initialize the nvml library so we can query the GPU for information
 	nvml, err := nvml.New("")
 	checkError(err)
@@ -218,8 +218,8 @@ func main() {
 		}
 		gpuName, isNotebook, isFermi := parseGpuInfo(*nvml)
 		winVer := parseWindowsVersion()
-		osId = getOsId(winVer, is64())
-		psId, pfId = getGpuIds(isFermi, isNotebook)
+		osID = getOsID(winVer, is64())
+		psID, pfID = getGpuIds(isFermi, isNotebook)
 
 		fmt.Println("Windows version:", winVer)
 		fmt.Println("Gpu model:", gpuName)
@@ -233,11 +233,11 @@ func main() {
 		checkError(err)
 
 		// osId = os version, psId = gpu series, pfId = gpu model
-		osId = getOsId(cfg.Winver, cfg.Sixtyfour)
-		psId, pfId = getGpuIds(cfg.Fermi, cfg.Notebook)
+		osID = getOsID(cfg.Winver, cfg.Sixtyfour)
+		psID, pfID = getGpuIds(cfg.Fermi, cfg.Notebook)
 	}
 
-	downloadUrl := getDownloadUrl(psId, pfId, osId)
+	downloadURL := getDownloadURL(psID, pfID, osID)
 
 	// Get current driver version and compare it to the newest
 	currentVersion, err := nvml.SystemGetDriverVersion()
@@ -246,11 +246,11 @@ func main() {
 	checkError(err)
 
 	versionRegexp := regexp.MustCompile(`\d+\.\d+`)
-	newestVersion, err := strconv.ParseFloat(versionRegexp.FindString(downloadUrl), 64)
+	newestVersion, err := strconv.ParseFloat(versionRegexp.FindString(downloadURL), 64)
 
 	if currentVersionFloat < newestVersion {
 		fmt.Println("Current version", currentVersionFloat, "<<<", newestVersion, "Newest version")
-		fmt.Println(downloadUrl)
+		fmt.Println(downloadURL)
 	} else {
 		fmt.Println("You already have the newest driver version installed:", currentVersion)
 	}
