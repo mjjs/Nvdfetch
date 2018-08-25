@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -14,15 +15,28 @@ import (
 	"strings"
 
 	"github.com/mxpv/nvml-go"
-	"golang.org/x/sys/windows/registry"
 )
+
+const nvidiaDownloadPage = "https://uk.download.nvidia.com"
+const nvidiaSearchPage = "https://www.nvidia.co.uk/Download/processDriver.aspx"
 
 // Struct to hold the required information to determine which driver to download
 type cfg struct {
-	Winver    int  `json:"Winver,string"`
-	Fermi     bool `json:"Fermi,string"`
-	Notebook  bool `json:"Notebook,string"`
-	Sixtyfour bool `json:"Sixtyfour,string"`
+	Winver    int  `json:"Winver"`
+	Fermi     bool `json:"Fermi"`
+	Notebook  bool `json:"Notebook"`
+	Sixtyfour bool `json:"64bit"`
+}
+
+type flags struct {
+	firstRun       bool
+	printVersion   bool
+	manualMode     bool
+	downloadDriver bool
+}
+
+type sysInfo struct {
+	osID, gpuSeriesID, gpuModelID int
 }
 
 // Helper function to reduce LOC when checking errors
@@ -32,29 +46,27 @@ func checkError(err error) {
 	}
 }
 
-// Check whether Windows is 64bit or 32bit
-func is64() bool {
-	// Works only with Windows
-	_, y := os.LookupEnv("ProgramFiles(x86)")
-	return y
-}
-
 // loadConfig reads the config file and returns its contents. If the file does not exist, createConfig will be called to create the file.
-func loadConfig() []byte {
+func loadConfig() *cfg {
+	cfg := new(cfg)
 	config, err := ioutil.ReadFile("config.json")
 	if os.IsNotExist(err) {
 		fmt.Println("Config file not found. Generating it now. . .")
 		createConfig()
-		config, _ := ioutil.ReadFile("config.json")
-		return config
+		config, _ = ioutil.ReadFile("config.json")
 	}
-	return config
+	json.Unmarshal(config, &cfg)
+	return cfg
 }
 
 // createConfig asks the user for a series of questions and saves the answers into the config file.
 func createConfig() {
-	config, err := os.Create("config.json")
-	checkError(err)
+	configFile, err := os.Create("config.json")
+	if err != nil {
+		log.Printf("")
+	}
+
+	config := cfg{Winver: 10, Fermi: false, Notebook: false, Sixtyfour: true}
 	fmt.Print("Running first time setup. Answer these questions to determine the right drivers for you:\n\n")
 
 	var osVersion string
@@ -77,39 +89,42 @@ func createConfig() {
 		fmt.Scanln(&noteBook)
 	}
 
+	var sixtyFour string
+	fmt.Println("\nIs your operating system 64bit?")
+	for sixtyFour != "y" && sixtyFour != "n" {
+		fmt.Println("Please enter either y or n")
+		fmt.Scanln(&sixtyFour)
+	}
+
 	if osVersion == "1" {
-		config.WriteString(`{"Winver": "7",` + "\n")
-	} else {
-		config.WriteString(`{"Winver": "10",` + "\n")
+		config.Winver = 7
 	}
 
 	if fermi == "y" {
-		config.WriteString(`"Fermi": "true",` + "\n")
-	} else {
-		config.WriteString(`"Fermi": "false",` + "\n")
+		config.Fermi = true
 	}
 
 	if noteBook == "y" {
-		config.WriteString(`"Notebook": "true",` + "\n")
-	} else {
-		config.WriteString(`"Notebook": "false",` + "\n")
+		config.Notebook = true
 	}
 
-	if is64() {
-		config.WriteString(`"Sixtyfour": "true"}` + "\n")
-	} else {
-		config.WriteString(`"Sixtyfour": "false"}` + "\n")
+	if sixtyFour == "n" {
+		config.Sixtyfour = false
 	}
 
-	config.Sync()
-	config.Close()
+	configJSON, err := json.MarshalIndent(&config, "", "  ")
+	if err != nil {
+		// Handle error
+	}
+
+	configFile.Write(configJSON)
+	configFile.Sync()
+	configFile.Close()
 }
 
 // getDownloadURL crawls the Nvidia's webpage and parses the required webpages to find the download link for the driver
 func getDownloadURL(psID, pfID, osID int) string {
 	fmt.Print("Fetching the driver download page\n\n")
-	const nvidiaDownloadPage string = "https://uk.download.nvidia.com"
-	const nvidiaSearchPage string = "https://www.nvidia.co.uk/Download/processDriver.aspx"
 
 	// Generate the initial URL which redirects to the driver's download page
 	driverSearchURL := nvidiaSearchPage + "?&psid=" + strconv.Itoa(psID) + "&pfid=" + strconv.Itoa(pfID) + "&rpf=1&osid=" + strconv.Itoa(osID) + "&lid=2&lang=en-uk&ctk=0"
@@ -132,56 +147,6 @@ func getDownloadURL(psID, pfID, osID int) string {
 	downloadURL := nvidiaDownloadPage + driverLinkRegexp.FindString(string(dlPage))
 
 	return strings.Split(downloadURL, "&lang")[0]
-}
-
-// parseWindowsVersion queries the Windows registry for the version number of Windows
-func parseWindowsVersion() int {
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion`, registry.QUERY_VALUE)
-	checkError(err)
-	defer k.Close()
-
-	_, _, err = k.GetIntegerValue("CurrentMajorVersionNumber")
-	if err == nil {
-		// Only Windows 10 has CurrentMajorVersionNumber
-		return 10
-	}
-	currentVersion, _, err := k.GetStringValue("CurrentVersion")
-	checkError(err)
-
-	switch currentVersion {
-	case "6.1":
-		return 7
-	case "6.2":
-		return 8
-	case "6.3":
-		return 8
-	default:
-		return 10
-	}
-
-}
-
-func parseGpuInfo(nvml nvml.API) (string, bool, bool) {
-	gpu, err := nvml.DeviceGetHandleByIndex(0)
-	checkError(err)
-	gpuName, err := nvml.DeviceGetName(gpu)
-	checkError(err)
-
-	// Check for M in the GPU name indicating a notebook model GPU
-	mobileGpuRegexp := regexp.MustCompile(`(GT|GTX)\s\d+M`)
-	isMobile := mobileGpuRegexp.MatchString(gpuName)
-
-	// Check if the gpu model is a Tesla (100) series GPU or newer
-	teslaRegexp := regexp.MustCompile(`(GTX|GT)\s\d+`)
-	isFermi := false
-
-	// Check if the gpu model is a Fermi (400) series GPU or newer
-	if teslaRegexp.MatchString(gpuName) {
-		fermiRegexp := regexp.MustCompile(`\s([456789]|1\d)\d+`)
-		isFermi = fermiRegexp.MatchString(gpuName)
-	}
-
-	return gpuName, isMobile, isFermi
 }
 
 func progressBar(percentage float64) string {
@@ -213,35 +178,81 @@ func showProgress(remoteFileSize int64, localFile *os.File) {
 	}
 }
 
-func main() {
-	var osID, psID, pfID int
-	// Initialize the nvml library so we can query the GPU for information
-	nvml, err := nvml.New("")
-	checkError(err)
-	nvml.Init()
-	defer nvml.Shutdown()
-
-	firstRun := flag.Bool("f", false, "Run the first time setup and exit")
-	getCurrentDriverVersion := flag.Bool("dv", false, "Print the current version of the GPU driver and exit")
-	automaticMode := flag.Bool("a", true, "Automatically query the host system for required information to get the latest driver")
-	manualMode := flag.Bool("m", false, "Use the config file to determine the system information")
-	downloadDriver := flag.Bool("d", false, "Download the driver if a newer one is found")
+func parseFlags() *flags {
+	f := new(flags)
+	flag.BoolVar(&f.firstRun, "f", false, "Run the first time setup and exit")
+	flag.BoolVar(&f.printVersion, "dv", false, "Print the current version of the GPU driver and exit")
+	flag.BoolVar(&f.manualMode, "m", false, "Use the config file to determine the system information")
+	flag.BoolVar(&f.downloadDriver, "d", false, "Download the driver if a newer one is found")
 	flag.Parse()
 
-	if *firstRun {
+	return f
+}
+
+func downloadDriver(url string) {
+	// Parse the filename out of the download URL
+	filenameRegexp := regexp.MustCompile(`\d+\.\d+-.+exe`)
+	filename := filenameRegexp.FindString(url)
+
+	// Create the driver file to disk
+	driverFile, err := os.Create(filename)
+	checkError(err)
+	defer driverFile.Close()
+
+	// Get the data
+	resp, err := http.Get(url)
+	checkError(err)
+	defer resp.Body.Close()
+
+	// Get the file size of the driver
+	remoteFileSize, err := strconv.ParseInt((resp.Header.Get("Content-Length")), 0, 64)
+	checkError(err)
+
+	// Show progress of the download
+	go showProgress(remoteFileSize, driverFile)
+
+	fmt.Println("Downloading file:", filename)
+	// Write data to file
+	_, err = io.Copy(driverFile, resp.Body)
+	if err != nil {
+		log.Printf("An error occured when writing the file: %v", err)
+		return
+	}
+}
+
+func main() {
+	sysInfo := new(sysInfo)
+	args := parseFlags()
+
+	if args.firstRun {
 		createConfig()
 		os.Exit(0)
 	}
 
-	if *getCurrentDriverVersion {
+	// Initialize the nvml library so we can query the GPU for information
+	nvml, err := nvml.New("")
+	if err != nil && !args.manualMode {
+		log.Fatalf("An error occurred, which is preventing automatic mode from continuing: %v", err)
+	}
+	nvml.Init()
+	defer nvml.Shutdown()
+
+	if args.printVersion {
 		currentVersion, err := nvml.SystemGetDriverVersion()
-		checkError(err)
+		if err != nil {
+			log.Fatal("Error querying for driver version")
+		}
 		nvml.Shutdown()
 		fmt.Print(currentVersion)
 		os.Exit(0)
 	}
 
-	if *automaticMode {
+	if args.manualMode {
+		config := loadConfig()
+
+		sysInfo.osID = getOsID(config.Winver, config.Sixtyfour)
+		sysInfo.gpuSeriesID, sysInfo.gpuModelID = getGpuIds(config.Fermi, config.Notebook)
+	} else {
 		fmt.Print("Querying system for required information\n\n")
 		if runtime.GOOS != "windows" {
 			fmt.Println("Unsupported operating system detected")
@@ -249,26 +260,14 @@ func main() {
 		}
 		gpuName, isNotebook, isFermi := parseGpuInfo(*nvml)
 		winVer := parseWindowsVersion()
-		osID = getOsID(winVer, is64())
-		psID, pfID = getGpuIds(isFermi, isNotebook)
+		sysInfo.osID = getOsID(winVer, is64())
+		sysInfo.gpuSeriesID, sysInfo.gpuModelID = getGpuIds(isFermi, isNotebook)
 
 		fmt.Println("Windows version:", winVer)
 		fmt.Println("Gpu model:", gpuName)
 	}
 
-	if *manualMode {
-		config := loadConfig()
-		// Map config JSON to cfg struct
-		var cfg cfg
-		err := json.Unmarshal(config, &cfg)
-		checkError(err)
-
-		// osId = os version, psId = gpu series, pfId = gpu model
-		osID = getOsID(cfg.Winver, cfg.Sixtyfour)
-		psID, pfID = getGpuIds(cfg.Fermi, cfg.Notebook)
-	}
-
-	downloadURL := getDownloadURL(psID, pfID, osID)
+	downloadURL := getDownloadURL(sysInfo.gpuSeriesID, sysInfo.gpuModelID, sysInfo.osID)
 
 	// Get current driver version and compare it to the newest
 	currentVersion, err := nvml.SystemGetDriverVersion()
@@ -278,36 +277,15 @@ func main() {
 
 	versionRegexp := regexp.MustCompile(`\d+\.\d+`)
 	newestVersion, err := strconv.ParseFloat(versionRegexp.FindString(downloadURL), 64)
+	if err != nil {
+		// Handle error
+	}
 
 	if currentVersionFloat < newestVersion {
 		fmt.Println("Current version", currentVersionFloat, "<<<", newestVersion, "Newest version")
 
-		if *downloadDriver {
-			// Parse the filename out of the download URL
-			filenameRegexp := regexp.MustCompile(`\d+\.\d+-.+exe`)
-			filename := filenameRegexp.FindString(downloadURL)
-
-			// Create the driver file to disk
-			driverFile, err := os.Create(filename)
-			checkError(err)
-			defer driverFile.Close()
-
-			// Get the data
-			resp, err := http.Get(downloadURL)
-			checkError(err)
-			defer resp.Body.Close()
-
-			// Get the file size of the driver
-			remoteFileSize, err := strconv.ParseInt((resp.Header.Get("Content-Length")), 0, 64)
-			checkError(err)
-
-			// Show progress of the download
-			go showProgress(remoteFileSize, driverFile)
-
-			fmt.Println("Downloading file:", filename)
-			// Write data to file
-			_, err = io.Copy(driverFile, resp.Body)
-			checkError(err)
+		if args.downloadDriver {
+			downloadDriver(downloadURL)
 		} else {
 			fmt.Println(downloadURL)
 		}
