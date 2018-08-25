@@ -20,7 +20,7 @@ import (
 const nvidiaDownloadPage = "https://uk.download.nvidia.com"
 const nvidiaSearchPage = "https://www.nvidia.co.uk/Download/processDriver.aspx"
 
-// Struct to hold the required information to determine which driver to download
+// cfg holds the required information to determine which driver to download
 type cfg struct {
 	Winver    int  `json:"Winver"`
 	Fermi     bool `json:"Fermi"`
@@ -28,6 +28,7 @@ type cfg struct {
 	Sixtyfour bool `json:"64bit"`
 }
 
+// Command line arguments
 type flags struct {
 	firstRun       bool
 	printVersion   bool
@@ -35,6 +36,7 @@ type flags struct {
 	downloadDriver bool
 }
 
+// sysInfo struct holds the info for the ID numbers used by the nvidia site
 type sysInfo struct {
 	osID, gpuSeriesID, gpuModelID int
 }
@@ -46,80 +48,57 @@ func checkError(err error) {
 	}
 }
 
+// getUserInput queries the user for the given question and returns boolean indicating an answer
+func getUserInput(question string) bool {
+	var input string
+	for input != "1" && input != "2" {
+		fmt.Println(question)
+		fmt.Scan(&input)
+	}
+
+	return input == "1"
+}
+
 // loadConfig reads the config file and returns its contents. If the file does not exist, createConfig will be called to create the file.
 func loadConfig() *cfg {
 	cfg := new(cfg)
 	config, err := ioutil.ReadFile("config.json")
+
 	if os.IsNotExist(err) {
-		fmt.Println("Config file not found. Generating it now. . .")
+		fmt.Println("Config file not found. Generating it now...")
 		createConfig()
-		config, _ = ioutil.ReadFile("config.json")
+		loadConfig()
 	}
-	json.Unmarshal(config, &cfg)
+
+	err = json.Unmarshal(config, &cfg)
+	if err != nil {
+		log.Fatalf("Error loading config file: %v", err)
+	}
+
 	return cfg
 }
 
 // createConfig asks the user for a series of questions and saves the answers into the config file.
 func createConfig() {
-	configFile, err := os.Create("config.json")
-	if err != nil {
-		log.Printf("")
-	}
-
 	config := cfg{Winver: 10, Fermi: false, Notebook: false, Sixtyfour: true}
 	fmt.Print("Running first time setup. Answer these questions to determine the right drivers for you:\n\n")
 
-	var osVersion string
-	for osVersion != "1" && osVersion != "2" {
-		fmt.Println("Is your Windows version: \n1. Windows 7, 8 or 8.1\n2. Windows 10")
-		fmt.Scanln(&osVersion)
-	}
+	winVer := getUserInput(fmt.Sprintln("Is your Windows version: \n1. Windows 7, 8 or 8.1\n2. Windows 10"))
 
-	fmt.Println("\nIs your GPU at least Fermi or newer? (400-TITAN series) y/n?")
-	var fermi string
-	for fermi != "y" && fermi != "n" {
-		fmt.Println("Please enter either y or n")
-		fmt.Scanln(&fermi)
-	}
-
-	fmt.Println("\nAre you using a notebook? y/n")
-	var noteBook string
-	for noteBook != "y" && noteBook != "n" {
-		fmt.Println("Please enter either y or n")
-		fmt.Scanln(&noteBook)
-	}
-
-	var sixtyFour string
-	fmt.Println("\nIs your operating system 64bit?")
-	for sixtyFour != "y" && sixtyFour != "n" {
-		fmt.Println("Please enter either y or n")
-		fmt.Scanln(&sixtyFour)
-	}
-
-	if osVersion == "1" {
+	if winVer == true {
 		config.Winver = 7
 	}
 
-	if fermi == "y" {
-		config.Fermi = true
-	}
-
-	if noteBook == "y" {
-		config.Notebook = true
-	}
-
-	if sixtyFour == "n" {
-		config.Sixtyfour = false
-	}
+	config.Fermi = getUserInput(fmt.Sprintln("\nIs your GPU: \n1. Older than a Fermi (400 cards)\n2. At least Fermi or newer? (400-TITAN series)"))
+	config.Notebook = getUserInput(fmt.Sprintln("\nAre you using a: \n1. Notebook\n2. PC"))
+	config.Sixtyfour = getUserInput(fmt.Sprintln("\nIs your operating system: \n1. 64bit\n2. 32bit"))
 
 	configJSON, err := json.MarshalIndent(&config, "", "  ")
 	if err != nil {
 		// Handle error
 	}
 
-	configFile.Write(configJSON)
-	configFile.Sync()
-	configFile.Close()
+	ioutil.WriteFile("config.json", configJSON, 0644)
 }
 
 // getDownloadURL crawls the Nvidia's webpage and parses the required webpages to find the download link for the driver
