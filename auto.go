@@ -3,10 +3,16 @@ package main
 import (
 	"os"
 	"regexp"
+	"runtime"
 
 	nvml "github.com/mxpv/nvml-go"
 	"golang.org/x/sys/windows/registry"
 )
+
+// isWindows checks if the program is running on Windows and returns
+func isWindows() bool {
+	return runtime.GOOS == "windows"
+}
 
 // Check whether Windows is 64bit or 32bit
 func is64() bool {
@@ -15,8 +21,8 @@ func is64() bool {
 	return y
 }
 
-// parseWindowsVersion queries the Windows registry for the version number of Windows
-func parseWindowsVersion() int {
+// getWindowsVersion queries the Windows registry for the version number of Windows
+func getWindowsVersion() int {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion`, registry.QUERY_VALUE)
 	checkError(err)
 	defer k.Close()

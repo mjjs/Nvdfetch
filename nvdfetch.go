@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 
@@ -61,7 +60,6 @@ func getUserInput(question string) bool {
 
 // loadConfig reads the config file and returns its contents. If the file does not exist, createConfig will be called to create the file.
 func loadConfig() *cfg {
-	cfg := new(cfg)
 	config, err := ioutil.ReadFile("config.json")
 
 	if os.IsNotExist(err) {
@@ -70,6 +68,7 @@ func loadConfig() *cfg {
 		loadConfig()
 	}
 
+	cfg := new(cfg)
 	err = json.Unmarshal(config, &cfg)
 	if err != nil {
 		log.Fatalf("Error loading config file: %v", err)
@@ -199,8 +198,34 @@ func downloadDriver(url string) {
 	}
 }
 
-func main() {
+func getSysInfo(manualMode bool, nvml *nvml.API) *sysInfo {
 	sysInfo := new(sysInfo)
+	switch manualMode {
+	case true:
+		config := loadConfig()
+
+		sysInfo.osID = getOsID(config.Winver, config.Sixtyfour)
+		sysInfo.gpuSeriesID, sysInfo.gpuModelID = getGpuIds(config.Fermi, config.Notebook)
+
+	case false:
+		fmt.Println("Querying system for required information")
+		if !isWindows() {
+			log.Fatal("Unsupported operating system detected. Exiting..")
+		}
+
+		gpuName, isNotebook, isFermi := parseGpuInfo(*nvml)
+		winVer := getWindowsVersion()
+		sysInfo.osID = getOsID(winVer, is64())
+		sysInfo.gpuSeriesID, sysInfo.gpuModelID = getGpuIds(isFermi, isNotebook)
+
+		fmt.Println("Windows version:", winVer)
+		fmt.Println("Gpu model:", gpuName)
+	}
+
+	return sysInfo
+}
+
+func main() {
 	args := parseFlags()
 
 	if args.firstRun {
@@ -213,6 +238,7 @@ func main() {
 	if err != nil && !args.manualMode {
 		log.Fatalf("An error occurred, which is preventing automatic mode from continuing: %v", err)
 	}
+
 	nvml.Init()
 	defer nvml.Shutdown()
 
@@ -226,25 +252,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	if args.manualMode {
-		config := loadConfig()
-
-		sysInfo.osID = getOsID(config.Winver, config.Sixtyfour)
-		sysInfo.gpuSeriesID, sysInfo.gpuModelID = getGpuIds(config.Fermi, config.Notebook)
-	} else {
-		fmt.Print("Querying system for required information\n\n")
-		if runtime.GOOS != "windows" {
-			fmt.Println("Unsupported operating system detected")
-			os.Exit(-1)
-		}
-		gpuName, isNotebook, isFermi := parseGpuInfo(*nvml)
-		winVer := parseWindowsVersion()
-		sysInfo.osID = getOsID(winVer, is64())
-		sysInfo.gpuSeriesID, sysInfo.gpuModelID = getGpuIds(isFermi, isNotebook)
-
-		fmt.Println("Windows version:", winVer)
-		fmt.Println("Gpu model:", gpuName)
-	}
+	sysInfo := getSysInfo(args.manualMode, nvml)
 
 	downloadURL := getDownloadURL(sysInfo.gpuSeriesID, sysInfo.gpuModelID, sysInfo.osID)
 
